@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Student Chat</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #f4f4f4;
+      }
+      #chat-container {
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+      #messages {
+        height: 400px;
+        overflow-y: auto;
+        padding: 15px;
+        display: flex;
+        flex-direction: column;
+      }
+      .message {
+        max-width: 80%;
+        margin: 10px 0;
+        padding: 10px;
+        border-radius: 8px;
+        /* Remove the transition to fix flickering */
+      }
+      .sent {
+        align-self: flex-end;
+        background-color: #007bff;
+        color: white;
+      }
+      .sent .message-info {
+        color: #eaeaea;
+      }
+      .received {
+        align-self: flex-start;
+        background-color: #e9ecef;
+        color: black;
+      }
+      .message-info {
+        font-size: 0.8em;
+        margin-top: 5px;
+        color: #6c757d;
+      }
+      #message-form {
+        display: flex;
+        padding: 15px;
+        background-color: #f8f9fa;
+      }
+      #message-input {
+        flex-grow: 1;
+        padding: 10px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+      }
+      #send-button {
+        margin-left: 10px;
+        padding: 10px 15px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .login-container {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-width: 300px;
+        margin: 0 auto;
+      }
+      #connection-status {
+        text-align: center;
+        padding: 5px;
+        margin-top: 10px;
+        font-size: 12px;
+      }
+      .connected {
+        color: green;
+      }
+      .disconnected {
+        color: red;
+      }
+      .spinner {
+        width: 20px;
+        height: 20px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-left: 10px;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+      .loading-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+      }
+      .loading-content {
+        background-color: white;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loading-overlay" id="loading-overlay">
+      <div class="loading-content">
+        <div class="spinner"></div>
+        <p id="loading-message">Loading...</p>
+      </div>
+    </div>
+
+    <div id="login-section" class="login-container">
+      <h2>Student Chat Login</h2>
+      <select id="user-select">
+        <option value="">Select Student</option>
+      </select>
+      <input type="password" id="password" placeholder="Password" />
+      <button id="login-button">Login</button>
+      <div id="login-error" style="color: red; margin-top: 10px"></div>
+    </div>
+
+    <div id="chat-section" style="display: none">
+      <div id="chat-container">
+        <div id="messages"></div>
+        <form id="message-form">
+          <input
+            type="text"
+            id="message-input"
+            placeholder="Type a message..."
+            required
+          />
+          <button type="submit" id="send-button">Send</button>
+        </form>
+      </div>
+      <div id="current-user-info"></div>
+      <div id="connection-status"></div>
+    </div>
+
+    <script>
+      // Supabase Configuration
+      // You should move these credentials to environment variables in a production app
+      const supabaseUrl = "https://hppsxcchwmlccekexwxz.supabase.co";
+      const supabaseKey =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwcHN4Y2Nod21sY2Nla2V4d3h6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMwOTY2MTgsImV4cCI6MjA1ODY3MjYxOH0.okkkJqWIapgQNW7qTG1lkGnrSGORD6Bvi-SXVmWxSRg";
+
+      // Create client with default options
+      const sBase = supabase.createClient(supabaseUrl, supabaseKey);
+
+      // DOM Elements
+      const loginSection = document.getElementById("login-section");
+      const chatSection = document.getElementById("chat-section");
+      const userSelect = document.getElementById("user-select");
+      const passwordInput = document.getElementById("password");
+      const loginButton = document.getElementById("login-button");
+      const messagesContainer = document.getElementById("messages");
+      const messageForm = document.getElementById("message-form");
+      const messageInput = document.getElementById("message-input");
+      const currentUserInfo = document.getElementById("current-user-info");
+      const connectionStatus = document.getElementById("connection-status");
+      const loginError = document.getElementById("login-error");
+      const loadingOverlay = document.getElementById("loading-overlay");
+      const loadingMessage = document.getElementById("loading-message");
+
+      let currentUser = null;
+      let messageChannel = null;
+      const globalChatId = 1; // Assuming a global chat for all students
+      let messagePollingInterval = null;
+      let lastMessageTimestamp = null;
+      let connectionMode = null; // "realtime" or "polling"
+
+      // Track rendered messages to prevent duplicates
+      const renderedMessageIds = new Set();
+      const pendingMessageIds = new Map(); // Map temporary IDs to server IDs
+
+      // Show/hide loading overlay
+      function showLoading(message = "Loading...") {
+        loadingMessage.textContent = message;
+        loadingOverlay.style.display = "flex";
+      }
+
+      function hideLoading() {
+        loadingOverlay.style.display = "none";
+      }
+
+      // Populate Student Dropdown on Page Load
+      async function loadStudents() {
+        showLoading("Loading students...");
+        try {
+          const { data, error } = await sBase
+            .from("student")
+            .select("id, name");
+
+          if (error) throw error;
+
+          data.forEach((student) => {
+            const option = document.createElement("option");
+            option.value = student.id;
+            option.textContent = student.name;
+            userSelect.appendChild(option);
+          });
+        } catch (err) {
+          console.error("Error fetching students:", err);
+          loginError.textContent =
+            "Failed to load students. Please refresh the page.";
+        } finally {
+          hideLoading();
+        }
+      }
+      loadStudents();
+
+      // Login Process
+      loginButton.addEventListener("click", async () => {
+        const studentId = userSelect.value;
+        const password = passwordInput.value;
+        loginError.textContent = "";
+
+        if (!studentId || !password) {
+          loginError.textContent =
+            "Please select a student and enter a password";
+          return;
+        }
+
+        showLoading("Logging in...");
+        try {
+          const { data, error } = await sBase
+            .from("student")
+            .select("*")
+            .eq("id", studentId)
+            .eq("password", password)
+            .single();
+
+          if (error || !data) {
+            loginError.textContent = "Invalid credentials";
+            hideLoading();
+            return;
+          }
+
+          currentUser = {
+            ...data,
+            fullName: data.name,
+          };
+
+          loginSection.style.display = "none";
+          chatSection.style.display = "block";
+
+          // Display current user info
+          currentUserInfo.textContent = `Logged in as: ${currentUser.fullName}`;
+
+          // Reset our tracking of rendered messages
+          renderedMessageIds.clear();
+          pendingMessageIds.clear();
+
+          // Load existing messages
+          await loadExistingMessages();
+
+          // Setup connection
+          setupRealtimeOrPolling();
+        } catch (err) {
+          console.error("Login error:", err);
+          loginError.textContent = "Login failed. Please try again.";
+        } finally {
+          hideLoading();
+        }
+      });
+
+      // Setup either realtime or polling based on what works
+      function setupRealtimeOrPolling() {
+        updateConnectionStatus("Connecting...", "");
+
+        // Ensure we start fresh
+        stopRealtimeSubscription();
+        stopMessagePolling();
+
+        // First try to set up realtime subscription
+        try {
+          subscribeToMessages();
+
+          // Check if we're still connected after 3 seconds
+          setTimeout(() => {
+            if (messageChannel) {
+              const state = messageChannel.state;
+              if (state !== "SUBSCRIBED") {
+                console.log(
+                  "Realtime subscription failed, falling back to polling"
+                );
+                stopRealtimeSubscription();
+                startMessagePolling();
+              }
+            } else {
+              // No channel at all, use polling
+              startMessagePolling();
+            }
+          }, 3000);
+        } catch (err) {
+          console.error("Error setting up realtime:", err);
+          startMessagePolling();
+        }
+      }
+
+      // Load Existing Messages
+      async function loadExistingMessages() {
+        showLoading("Loading messages...");
+        try {
+          const { data: messages, error } = await sBase
+            .from("message")
+            .select("*, student(name, id)")
+            .eq("chat_id", globalChatId)
+            .order("date_time", { ascending: true });
+
+          if (error) throw error;
+
+          // Clear previous messages
+          messagesContainer.innerHTML = "";
+          renderedMessageIds.clear();
+
+          // Render existing messages
+          if (messages && messages.length > 0) {
+            messages.forEach((message) => {
+              renderMessage(message);
+            });
+
+            // Store timestamp of latest message
+            lastMessageTimestamp = new Date(
+              messages[messages.length - 1].date_time
+            ).toISOString();
+          } else {
+            lastMessageTimestamp = new Date().toISOString();
+          }
+        } catch (err) {
+          console.error("Error loading messages:", err);
+          updateConnectionStatus("Failed to load messages", "disconnected");
+        } finally {
+          hideLoading();
+        }
+      }
+
+      // Subscribe to Real-Time Messages
+      function subscribeToMessages() {
+        // Stop any existing subscription
+        stopRealtimeSubscription();
+
+        try {
+          // Set status to connecting
+          updateConnectionStatus("Connecting...", "");
+
+          // Create a new real-time channel
+          messageChannel = sBase
+            .channel("messages-channel")
+            .on(
+              "postgres_changes",
+              {
+                event: "INSERT",
+                schema: "public",
+                table: "message",
+                filter: `chat_id=eq.${globalChatId}`,
+              },
+              async (payload) => {
+                // Check if we already have this message
+                if (renderedMessageIds.has(payload.new.id)) {
+                  return; // Skip if already rendered
+                }
+
+                // Handle messages from other users
+                if (payload.new.student_id !== currentUser.id) {
+                  // Fetch full message details
+                  const { data: fullMessageData, error } = await sBase
+                    .from("message")
+                    .select("*, student(name, id)")
+                    .eq("id", payload.new.id)
+                    .single();
+
+                  if (fullMessageData) {
+                    renderMessage(fullMessageData);
+
+                    // Update the timestamp for our last seen message
+                    const newMessageTime = new Date(
+                      fullMessageData.date_time
+                    ).toISOString();
+                    if (newMessageTime > lastMessageTimestamp) {
+                      lastMessageTimestamp = newMessageTime;
+                    }
+                  }
+                }
+                // For messages from current user, just update the tracking
+                else {
+                  renderedMessageIds.add(payload.new.id);
+
+                  // Check if this corresponds to a pending message
+                  for (const [tempId, msgData] of pendingMessageIds.entries()) {
+                    if (
+                      msgData.content === payload.new.content &&
+                      Math.abs(
+                        new Date(msgData.date_time) -
+                          new Date(payload.new.date_time)
+                      ) < 5000
+                    ) {
+                      // Update the message element ID
+                      const tempEl = document.getElementById(`msg-${tempId}`);
+                      if (tempEl) {
+                        tempEl.id = `msg-${payload.new.id}`;
+                      }
+                      pendingMessageIds.delete(tempId);
+                      break;
+                    }
+                  }
+                }
+              }
+            )
+            .subscribe((status) => {
+              console.log(`Subscription status: ${status}`);
+              if (status === "SUBSCRIBED") {
+                connectionMode = "realtime";
+                updateConnectionStatus("Connected (Realtime)", "connected");
+                // Stop polling if it's running
+                stopMessagePolling();
+              } else if (status === "CLOSED" || status === "CHANNEL_ERROR") {
+                updateConnectionStatus(
+                  "Realtime disconnected, trying polling...",
+                  "disconnected"
+                );
+                stopRealtimeSubscription();
+                // Try polling as fallback
+                startMessagePolling();
+              }
+            });
+        } catch (err) {
+          console.error("Subscription error:", err);
+          updateConnectionStatus("Connection error", "disconnected");
+          // Try polling as fallback
+          startMessagePolling();
+        }
+      }
+
+      // Stop realtime subscription
+      function stopRealtimeSubscription() {
+        if (messageChannel) {
+          try {
+            sBase.removeChannel(messageChannel);
+          } catch (err) {
+            console.error("Error removing channel:", err);
+          }
+          messageChannel = null;
+        }
+
+        if (connectionMode === "realtime") {
+          connectionMode = null;
+        }
+      }
+
+      // Poll for new messages as a fallback
+      function startMessagePolling() {
+        // Stop any existing polling
+        stopMessagePolling();
+
+        // Start new polling interval
+        connectionMode = "polling";
+        updateConnectionStatus("Connected (Polling)", "connected");
+
+        messagePollingInterval = setInterval(async () => {
+          try {
+            // Get messages newer than the last one we've seen
+            const { data: newMessages, error } = await sBase
+              .from("message")
+              .select("*, student(name, id)")
+              .eq("chat_id", globalChatId)
+              .gt("date_time", lastMessageTimestamp)
+              .order("date_time", { ascending: true });
+
+            if (error) throw error;
+
+            if (newMessages && newMessages.length > 0) {
+              // Filter out messages we've already rendered
+              const unrenderedMessages = newMessages.filter(
+                (msg) => !renderedMessageIds.has(msg.id)
+              );
+
+              // Process messages from other users
+              const otherMessages = unrenderedMessages.filter(
+                (msg) => msg.student_id !== currentUser.id
+              );
+
+              // Render new messages from others
+              otherMessages.forEach(renderMessage);
+
+              // For our own messages, update tracking without rendering again
+              const ownMessages = unrenderedMessages.filter(
+                (msg) => msg.student_id === currentUser.id
+              );
+              ownMessages.forEach((msg) => {
+                renderedMessageIds.add(msg.id);
+
+                // Check for any pending messages that match
+                for (const [tempId, msgData] of pendingMessageIds.entries()) {
+                  if (
+                    msgData.content === msg.content &&
+                    Math.abs(
+                      new Date(msgData.date_time) - new Date(msg.date_time)
+                    ) < 5000
+                  ) {
+                    // Update the message element ID
+                    const tempEl = document.getElementById(`msg-${tempId}`);
+                    if (tempEl) {
+                      tempEl.id = `msg-${msg.id}`;
+                    }
+                    pendingMessageIds.delete(tempId);
+                    break;
+                  }
+                }
+              });
+
+              // Update timestamp if needed
+              if (newMessages.length > 0) {
+                const latestMessageTime = new Date(
+                  newMessages[newMessages.length - 1].date_time
+                ).toISOString();
+                if (latestMessageTime > lastMessageTimestamp) {
+                  lastMessageTimestamp = latestMessageTime;
+                }
+              }
+            }
+          } catch (err) {
+            console.error("Polling error:", err);
+            updateConnectionStatus(
+              "Polling error, reconnecting...",
+              "disconnected"
+            );
+            // Try to reconnect
+            stopMessagePolling();
+            setTimeout(startMessagePolling, 5000);
+          }
+        }, 3000); // Poll every 3 seconds
+      }
+
+      // Stop message polling
+      function stopMessagePolling() {
+        if (messagePollingInterval) {
+          clearInterval(messagePollingInterval);
+          messagePollingInterval = null;
+        }
+
+        if (connectionMode === "polling") {
+          connectionMode = null;
+        }
+      }
+
+      // Update connection status display
+      function updateConnectionStatus(message, className) {
+        connectionStatus.textContent = message;
+        connectionStatus.className = className;
+      }
+
+      // Render Messages
+      function renderMessage(message) {
+        // Skip if already rendered
+        if (renderedMessageIds.has(message.id)) {
+          return;
+        }
+
+        // Add to tracked messages
+        if (message.id && !message.id.toString().startsWith("temp-")) {
+          renderedMessageIds.add(message.id);
+        }
+
+        const messageEl = document.createElement("div");
+        messageEl.classList.add("message");
+        messageEl.id = `msg-${message.id}`;
+
+        // Check if this message is from the current user
+        // We need to ensure a stable comparison by converting to strings
+        const studentId = String(message.student_id);
+        const currentUserId = String(currentUser.id);
+        const isSentByCurrentUser = studentId === currentUserId;
+
+        // Add the appropriate class
+        if (isSentByCurrentUser) {
+          messageEl.classList.add("sent");
+        } else {
+          messageEl.classList.add("received");
+        }
+
+        // Get sender name (safely)
+        let senderName = "Unknown";
+
+        if (isSentByCurrentUser) {
+          senderName = currentUser.fullName;
+        } else if (message.student && message.student.name) {
+          senderName = message.student.name;
+        }
+
+        // Create message content with sender info
+        messageEl.innerHTML = `
+            <div>${escapeHTML(message.content)}</div>
+            <div class="message-info">
+                ${escapeHTML(senderName)} • ${new Date(
+          message.date_time
+        ).toLocaleTimeString()}
+            </div>
+        `;
+
+        // Add to message container without animations to avoid flickering
+        messagesContainer.appendChild(messageEl);
+
+        // Auto-scroll to bottom
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+
+      // Simple HTML escape function to prevent XSS
+      function escapeHTML(str) {
+        if (!str) return "";
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      // Send Message
+      messageForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const content = messageInput.value.trim();
+
+        if (content) {
+          const now = new Date();
+          const timestamp = now.toISOString();
+          const tempId = "temp-" + Date.now();
+
+          try {
+            // Clear the input field right away for better UX
+            messageInput.value = "";
+
+            // Temporarily disable send button
+            const sendButton = document.getElementById("send-button");
+            const originalText = sendButton.textContent;
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<span class="spinner"></span>';
+
+            // Create a message object to render immediately
+            const messageObj = {
+              id: tempId,
+              content: content,
+              student_id: currentUser.id,
+              student: {
+                name: currentUser.fullName,
+                id: currentUser.id,
+              },
+              date_time: timestamp,
+            };
+
+            // Store this pending message for reconciliation
+            pendingMessageIds.set(tempId, {
+              content,
+              date_time: timestamp,
+            });
+
+            // Render the message right away
+            renderMessage(messageObj);
+
+            // Actually send to server
+            const { data, error } = await sBase
+              .from("message")
+              .insert({
+                chat_id: globalChatId,
+                content: content,
+                student_id: currentUser.id,
+                date_time: timestamp,
+              })
+              .select();
+
+            if (error) throw error;
+
+            // If we got a response with ID, update our tracking
+            if (data && data[0] && data[0].id) {
+              renderedMessageIds.add(data[0].id);
+
+              // Update the message ID in the DOM
+              const tempEl = document.getElementById(`msg-${tempId}`);
+              if (tempEl) {
+                tempEl.id = `msg-${data[0].id}`;
+              }
+
+              // Remove from pending
+              pendingMessageIds.delete(tempId);
+            }
+
+            // Update last message timestamp
+            if (timestamp > lastMessageTimestamp) {
+              lastMessageTimestamp = timestamp;
+            }
+
+            // Re-enable send button
+            sendButton.disabled = false;
+            sendButton.textContent = originalText;
+          } catch (err) {
+            console.error("Error sending message:", err);
+            alert("Failed to send message. Please try again.");
+            // Restore the message in the input field
+            messageInput.value = content;
+
+            // Remove the temporary message
+            const tempEl = document.getElementById(`msg-${tempId}`);
+            if (tempEl) {
+              tempEl.remove();
+            }
+
+            // Remove from pending
+            pendingMessageIds.delete(tempId);
+
+            // Re-enable send button
+            const sendButton = document.getElementById("send-button");
+            sendButton.disabled = false;
+            sendButton.textContent = "Send";
+          }
+        }
+      });
+
+      // Reconnect function
+      function reconnect() {
+        updateConnectionStatus("Reconnecting...", "");
+        setupRealtimeOrPolling();
+      }
+
+      // Add reconnect button
+      connectionStatus.addEventListener("click", function () {
+        if (this.classList.contains("disconnected")) {
+          reconnect();
+        }
+      });
+
+      // Handle page visibility changes to reconnect if needed
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && connectionMode === null) {
+          reconnect();
+        }
+      });
+
+      // Handle page unload to clean up subscriptions
+      window.addEventListener("beforeunload", () => {
+        stopRealtimeSubscription();
+        stopMessagePolling();
+      });
+    </script>
+  </body>
+</html>
